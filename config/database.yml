@@ -1,0 +1,12 @@
+qdup:
+  adapter:  mysql
+  host:     localhost
+  port:     3306
+  database: qdup
+  username: qdup
+  password: 
+  options:
+    AutoCommit: 1
+    PrintError: 0
+    RaiseError: 1
+    mysql_auto_reconnect: 1

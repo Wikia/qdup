@@ -1,0 +1,24 @@
+#!/usr/bin/perl -w
+
+use strict;
+
+use FindBin qw/$Bin/;
+use lib "$Bin/../lib";
+
+use Getopt::Long;
+use Qdup::Manager;
+
+my $queue = 'main';
+my $pool  = 1;
+my $lib;
+
+GetOptions( 'queue=s' => \$queue,
+            'pool=i'  => \$pool,
+            'lib=s'   => \$lib   );
+
+my $manager = Qdup::Manager->new( lib   => $lib,
+                                  queue => $queue,
+                                  pool  => $pool   );
+                                  
+$manager->run;
+

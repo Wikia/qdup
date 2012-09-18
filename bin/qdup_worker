@@ -1,0 +1,24 @@
+#!/usr/bin/perl -w
+
+use strict;
+
+use FindBin qw/$Bin/;
+use lib "$Bin/../lib";
+
+use Getopt::Long;
+use Qdup::Worker;
+
+my $pool = 1;
+my $id   = 1;
+my $lib;
+
+GetOptions( 'pool=i' => \$pool,
+            'id=i'   => \$id,
+            'lib=s'  => \$lib );
+
+my $worker = Qdup::Worker->new( pool => $pool,
+                                id   => $id,
+                                lib  => $lib );
+
+$worker->run;
+

@@ -1,4 +1,4 @@
 qdup
 ====
 
-A queue/worker system built on top of MySQL
+A perl-based queue/worker system built on top of MySQL
