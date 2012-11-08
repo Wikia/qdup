@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Capture::Tiny ':all';
+use FindBin qw/$Bin/;
 use Qdup::Common;
 
 sub new {
@@ -11,32 +12,67 @@ sub new {
     my (%params) = @_; 
     my $self = bless \%params, ref $class || $class;
 
-    $self->{queue} ||= 'main';
-    $self->{sleep} ||= 0;
-    $self->{id}    ||= 1;
+    $self->{queue}    ||= 'main';
+    $self->{table}    ||= 'qdup_jobs';
+    $self->{sleep}    ||= 0;
+    $self->{id}       ||= 1;
+    $self->{work_dir} ||= "$Bin/../log";
 
     $self->{host} = `hostname`;
     chomp($self->{host});
 
     $self->{worker} = "$self->{host}:$$";  # host:pid
 
-    eval "use lib qw($self->{lib})" if defined $self->{lib};
+    open $self->{LOG}, ">> $self->{work_dir}/qdup_worker.$self->{queue}.$self->{id}.log";
 
-    open $self->{LOG}, ">> /home/analytics/src/qdup/log/qdup_worker.$self->{queue}.$self->{id}.log";
+    if (defined $self->{lib}) {
+        eval "use lib qw($self->{lib})";
+        if (my $err = $@) {
+            $self->log("FAILED to include lib $self->{lib}") && die;
+        }
+    }
+
+    $self->{pool_filter_sql} = " AND (id % $self->{pool}) = " . ($self->{id}-1);
 
     return $self;
+}
+
+sub done {
+    my ($self, $status, $msg) = @_;
+    $msg ||= '';
+    $self->log("$status [$self->{job_config}->{id}] $msg");
+    my $result = 0;
+    eval {
+        $result = Qdup::Common::db_do(
+            "UPDATE $self->{table}
+                SET worker    = null,
+                    status    = '$status',
+                    end_time  = now(),
+                    run_after = CASE WHEN '$status' = 'COMPLETED' THEN run_after
+                                     ELSE DATE_ADD(now(), INTERVAL 5 MINUTE) END
+              WHERE id = $self->{job_config}->{id}"
+        );
+    };
+    if (my $err = $@) {
+        $self->log("ERROR marking $self->{table} row after done [$self->{job_config}->{id}]: $err");
+    }
+    if (1 != $result) {
+        $self->log("ERROR no rows marked as done [$self->{job_config}->{id}]");
+    }
+}
+
+sub log {
+    my ($self, $msg) = @_;
+    chomp($msg);
+    my $ts = `date +"%Y-%m-%d %H:%M:%S"`;
+    chomp($ts);
+    print { $self->{LOG} } "$ts : $msg\n";
 }
 
 sub run {
     my $self = shift;
 
     $self->{dbh} ||= Qdup::Common::db;
-
-    if ($self->{pool} && $self->{id}) {
-        $self->{pool_filter_sql} = " AND (id % $self->{pool}) = " . ($self->{id}-1);
-    } else {
-        $self->{pool_filter_sql} = '';
-    }
 
     while (1) {
         sleep($self->{sleep});
@@ -45,7 +81,7 @@ sub run {
         my $job_batch_sql = 
             "SELECT *
                FROM (SELECT *
-                       FROM qdup_jobs
+                       FROM $self->{table}
                       WHERE queue  = '$self->{queue}'
                         AND status = 'WAITING'
                         AND worker IS NULL
@@ -53,11 +89,10 @@ sub run {
                         $self->{pool_filter_sql}
                       ORDER BY priority,
                                FLOOR(id % 1000)
-                      LIMIT 2000) sub
-              ORDER BY RAND()
-              LIMIT 1000";
-
-        $job_batch_sql =~ s/\s+/ /g;
+                      LIMIT 1000) sub
+              ORDER BY priority,
+                       RAND()
+              LIMIT 50";
 
         my $job_batch = [];
 
@@ -66,9 +101,11 @@ sub run {
         };
 
         if (0 == scalar @$job_batch) {
-            $self->log('No jobs found.');
-            $self->{sleep} = $self->{sleep} >= 5 ? 5 : $self->{sleep} + 1;
+            # No available jobs; remove the filter and sleep a little longer
+            $self->{pool_filter_sql} = '';
+            $self->{sleep} = $self->{sleep} >= 60 ? 60 : $self->{sleep} + 5;
         } else {
+            $self->{pool_filter_sql} = " AND (id % $self->{pool}) = " . ($self->{id}-1);
             $self->{sleep} = 0;
         }
 
@@ -78,7 +115,7 @@ sub run {
 
             # Lock job
             my $lock_sql =
-                "UPDATE qdup_jobs
+                "UPDATE $self->{table}
                     SET worker = '$self->{worker}',
                         status = 'RUNNING',
                         begin_time = now(),
@@ -100,11 +137,15 @@ sub run {
                 next JOB;
             }
 
+            $self->log("WORKING [$self->{job_config}->{id}]");
+
+            # TODO: force unload of class module (on demand?)
+
             # Load job class
             if (! defined $INC{ $self->{job_config}->{class} }) {
                 eval "use $self->{job_config}->{class}";
                 if (my $err = $@) {
-                    $self->fail("FAILED to find module '$self->{job_config}->{class}'");
+                    $self->done('FAILED', $err);
                     next JOB;
                 }
             }
@@ -114,106 +155,32 @@ sub run {
               $self->{job} = $self->{job_config}->{class}->new();
             };
             if (my $err = $@) {
-                $self->fail("FAILED to instantiate job: $err");
+                $self->done('FAILED', $err);
                 next JOB;
             }
 
             # Execute job
             eval {
                 ($self->{stdout}, $self->{stderr}, $self->{result}) = capture {
-                    return scalar $self->{job}->execute($self->{job_config});
+                    local $SIG{ALRM} = sub { die 'TIMEDOUT' };
+                    alarm 300; # 5 minutes
+                    my $rv = scalar $self->{job}->execute($self->{job_config});
+                    alarm 0;
+                    return $rv;
                 };
             };
             if (my $err = $@) {
-                $self->fail("FAILED during execution: $err");
+                if ($err =~ m/TIMEDOUT/) {
+                    $self->done('TIMEDOUT');
+                } else {
+                    $self->done('FAILED', $err . '; stdout: ' . $self->{stdout});
+                }
                 next JOB;
             }
-            $self->complete;
-        }
-    }
-}
+            $self->done('COMPLETED');
 
-sub log {
-    my $self = shift;
-
-    $self->{stdout} ||= '';
-    $self->{stderr} ||= '';
-
-    $self->{stdout} =~ s/'/''/g;
-    $self->{stderr} =~ s/'/''/g;
-
-    chomp($self->{stdout});
-    chomp($self->{stderr});
-
-    if ($self->{stdout} ne '' || $self->{stderr} ne '') {
-        eval {
-            Qdup::Common::db_do(
-               "REPLACE INTO qdup_job_logs (
-                    id,
-                    stdout,
-                    stderr
-                ) VALUES (
-                    $self->{job_config}->{id},
-                    '$self->{stdout}',
-                    '$self->{stderr}'
-                )"
-            );
-        };
-        if (my $err = $@) {
-            print { $self->{LOG} } $err;
-        }
-    } else {
-        eval {
-            Qdup::Common::db_do("DELETE FROM qdup_job_logs WHERE id = $self->{job_config}->{id}");
-        };
-        if (my $err = $@) {
-            print { $self->{LOG} } $err;
-        }
-    }
-    $self->{stdout} = undef;
-    $self->{stderr} = undef;
-}
-
-sub fail {
-    my ($self, $msg) = @_;
-    $self->{stderr} .= $msg;
-    $self->log;
-    eval {
-        Qdup::Common::db_do(
-            "UPDATE qdup_jobs
-                SET worker    = null,
-                    status    = 'FAILED',
-                    end_time  = now(),
-                    run_after = DATE_ADD(now(), INTERVAL 1 MINUTE)
-              WHERE id = $self->{job_config}->{id}",
-            $self->{dbh}
-        );
-    };
-    if (my $err = $@) {
-        print { $self->{LOG} } $err;
-    }
-    $self->{job}        = undef;
-    $self->{job_config} = undef;
-}
-
-sub complete {
-    my $self = shift;
-    $self->log;
-    eval {
-        Qdup::Common::db_do(
-            "UPDATE qdup_jobs
-                SET worker   = null,
-                    status   = 'COMPLETED',
-                    end_time = now()
-              WHERE id = $self->{job_config}->{id}",
-            $self->{dbh}
-        );
-    };
-    if (my $err = $@) {
-        print { $self->{LOG} } $err;
-    }
-    $self->{job}        = undef;
-    $self->{job_config} = undef;
+        }  # End of batch of jobs
+    }  # End of loop for retrieving a batch of jobs
 }
 
 sub DESTROY {
