@@ -8,17 +8,20 @@ use lib "$Bin/../lib";
 use Getopt::Long;
 use Qdup::Manager;
 
+my $table = 'qdup_jobs';
 my $queue = 'main';
 my $pool  = 1;
 my $lib;
 
-GetOptions( 'queue=s' => \$queue,
+GetOptions( 'table=s' => \$table,
+            'queue=s' => \$queue,
             'pool=i'  => \$pool,
             'lib=s'   => \$lib   );
 
-my $manager = Qdup::Manager->new( lib   => $lib,
+my $manager = Qdup::Manager->new( table => $table,
                                   queue => $queue,
-                                  pool  => $pool   );
+                                  pool  => $pool,
+                                  lib   => $lib   );
                                   
 $manager->run;
 
