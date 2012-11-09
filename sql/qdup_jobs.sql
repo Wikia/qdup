@@ -11,6 +11,5 @@ CREATE TABLE qdup_jobs (
     worker        VARCHAR(255),
     args          VARCHAR(2048) CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL DEFAULT '',
 --  <custom columns>
-    PRIMARY KEY (id),
-    KEY status_priority_id (status, priority, id)
+    PRIMARY KEY (id)
 ) ENGINE=InnoDB;
