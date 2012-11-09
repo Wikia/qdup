@@ -159,6 +159,11 @@ sub run {
                 next JOB;
             }
 
+            # Clear output variables
+            $self->{stdout} = '';
+            $self->{stderr} = '';
+            $self->{result} = '';
+
             # Execute job
             eval {
                 ($self->{stdout}, $self->{stderr}, $self->{result}) = capture {
@@ -170,6 +175,7 @@ sub run {
                 };
             };
             if (my $err = $@) {
+                alarm 0;
                 if ($err =~ m/TIMEDOUT/) {
                     $self->done('TIMEDOUT');
                 } else {
