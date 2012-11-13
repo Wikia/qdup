@@ -72,8 +72,6 @@ sub log {
 sub run {
     my $self = shift;
 
-    $self->{dbh} ||= Qdup::Common::db;
-
     while (1) {
         sleep($self->{sleep});
 
@@ -88,8 +86,8 @@ sub run {
                         AND (run_after IS NULL OR run_after < now())
                         $self->{pool_filter_sql}
                       ORDER BY priority,
-                               FLOOR(id % 1000)
-                      LIMIT 1000) sub
+                               FLOOR(id / 1000)
+                      LIMIT 500) sub
               ORDER BY priority,
                        RAND()
               LIMIT 50";
@@ -97,7 +95,7 @@ sub run {
         my $job_batch = [];
 
         eval {
-            $job_batch = Qdup::Common::db_arrayref($job_batch_sql, $self->{dbh});
+            $job_batch = Qdup::Common::db_arrayref($job_batch_sql);
         };
 
         if (0 == scalar @$job_batch) {
@@ -129,7 +127,7 @@ sub run {
             my $lock = 0;
 
             eval {
-                $lock = Qdup::Common::db_do($lock_sql, $self->{dbh});
+                $lock = Qdup::Common::db_do($lock_sql);
             };
 
             if (0 == $lock) {
