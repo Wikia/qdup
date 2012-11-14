@@ -101,7 +101,7 @@ sub run {
         if (0 == scalar @$job_batch) {
             # No available jobs; remove the filter and sleep a little longer
             $self->{pool_filter_sql} = '';
-            $self->{sleep} = $self->{sleep} >= 60 ? 60 : $self->{sleep} + 5;
+            $self->{sleep} = $self->{sleep} >= 30 ? 30 : $self->{sleep} + 5;
         } else {
             $self->{pool_filter_sql} = " AND (id % $self->{pool}) = " . ($self->{id}-1);
             $self->{sleep} = 0;
@@ -166,7 +166,7 @@ sub run {
             eval {
                 ($self->{stdout}, $self->{stderr}, $self->{result}) = capture {
                     local $SIG{ALRM} = sub { die 'TIMEDOUT' };
-                    alarm 300; # 5 minutes
+                    alarm 600; # 10 minutes
                     my $rv = scalar $self->{job}->execute($self->{job_config});
                     alarm 0;
                     return $rv;
