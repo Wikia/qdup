@@ -90,12 +90,4 @@ sub db_arrayref {
     return $arrayref;
 }
 
-#sub log {
-#    my $msg = shift;
-#    chomp($msg);
-#    my $ts = `date +"%Y-%m-%d %H:%M:%S"`;
-#    chomp($ts);
-#    print "$ts : $msg\n";
-#}
-
 1;
