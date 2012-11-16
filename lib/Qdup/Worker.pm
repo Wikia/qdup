@@ -45,7 +45,7 @@ sub done {
     eval {
         $result = Qdup::Common::db_do(
             "UPDATE $self->{table}
-                SET worker    = null,
+                SET worker    = '',
                     status    = '$status',
                     end_time  = now(),
                     run_after = CASE WHEN '$status' = 'COMPLETED' THEN run_after
@@ -82,7 +82,7 @@ sub run {
                        FROM $self->{table}
                       WHERE queue  = '$self->{queue}'
                         AND status = 'WAITING'
-                        AND worker IS NULL
+                        AND worker = ''
                         AND (run_after IS NULL OR run_after < now())
                         $self->{pool_filter_sql}
                       ORDER BY priority,
@@ -119,9 +119,9 @@ sub run {
                         begin_time = now(),
                         end_time   = null
                   WHERE id = $self->{job_config}->{id}
-                    AND queue = '$self->{queue}'
+                    AND queue  = '$self->{queue}'
                     AND status = 'WAITING'
-                    AND worker IS NULL
+                    AND worker = ''
                     AND run_after < now()";
 
             my $lock = 0;

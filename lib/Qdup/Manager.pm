@@ -51,7 +51,7 @@ sub release {
         # Mark abandoned jobs as WAITING, so they will be picked up for execution again
         Qdup::Common::db_do(
             "UPDATE qdup_jobs
-                SET worker   = null,
+                SET worker   = '',
                     status   = 'WAITING',
                     end_time = now()
               WHERE worker = '$worker'"
@@ -106,7 +106,7 @@ sub run {
         Qdup::Common::db_do( [
             "UPDATE qdup.qdup_jobs
                 SET status = 'WAITING',
-                    worker = null,
+                    worker = '',
                     begin_time = null
               WHERE status = 'RUNNING'
                 AND queue = '$self->{queue}'"
