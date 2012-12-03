@@ -21,7 +21,6 @@ SELECT class,
                                                                     AND begin_time > now() - INTERVAL 10 MINUTE
                                                                     AND end_time   > now() - INTERVAL 10 MINUTE THEN begin_time ELSE null END))), 2) AS jobs_per_min
   FROM qdup.qdup_jobs
- GROUP BY class;
-
-
+ GROUP BY class,
+          priority
 
