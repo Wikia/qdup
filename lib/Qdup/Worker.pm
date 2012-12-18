@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Capture::Tiny ':all';
+use Carp;
 use FindBin qw/$Bin/;
 use Qdup::Common;
 
@@ -24,11 +25,12 @@ sub new {
     $self->{worker} = "$self->{host}:$$";  # host:pid
 
     open $self->{LOG}, ">> $self->{work_dir}/qdup_worker.$self->{queue}.$self->{id}.log";
+    select((select($self->{LOG}), $|=1)[0]);
 
     if (defined $self->{lib}) {
         eval "use lib qw($self->{lib})";
         if (my $err = $@) {
-            $self->log("FAILED to include lib $self->{lib}") && die;
+            $self->log("FAILED to include lib $self->{lib}") && confess "FAILED to include lib $self->{lib}";
         }
     }
 
@@ -43,13 +45,28 @@ sub done {
     $self->log("$status [$self->{job_config}->{id}] $msg");
     my $result = 0;
     eval {
+        my $retry = 0;
+        my $retry_delay = 0;
+
+        if ($status eq 'FAILED') {
+            $retry = $self->{job}->retry_on_failure;
+        } elsif ($status eq 'TIMEDOUT') {
+            $retry = $self->{job}->retry_on_timeout;
+        }
+
+        if ($retry) {
+            $retry_delay = $self->{job}->retry_delay;
+        }
+
         $result = Qdup::Common::db_do(
             "UPDATE $self->{table}
                 SET worker    = '',
-                    status    = '$status',
-                    end_time  = now(),
-                    run_after = CASE WHEN '$status' = 'COMPLETED' THEN run_after
-                                     ELSE DATE_ADD(now(), INTERVAL 5 MINUTE) END
+                    status    = CASE WHEN '$retry' = 1 THEN 'WAITING'
+                                     ELSE '$status' END,
+                    end_time  = CASE WHEN '$retry' = 1 THEN null
+                                     ELSE now() END,
+                    run_after = CASE WHEN '$status' = 'COMPLETED' OR '$retry' = 0 THEN run_after
+                                     ELSE DATE_ADD(now(), INTERVAL $retry_delay SECOND) END
               WHERE id = $self->{job_config}->{id}"
         );
     };
@@ -86,11 +103,11 @@ sub run {
                         AND (run_after IS NULL OR run_after < now())
                         $self->{pool_filter_sql}
                       ORDER BY priority,
-                               FLOOR(id / 1000)
-                      LIMIT 500) sub
+                               id
+                      LIMIT 1000) sub
               ORDER BY priority,
                        RAND()
-              LIMIT 50";
+              LIMIT 250";
 
         my $job_batch = [];
 
@@ -143,7 +160,7 @@ sub run {
             if (! defined $INC{ $self->{job_config}->{class} }) {
                 eval "use $self->{job_config}->{class}";
                 if (my $err = $@) {
-                    $self->done('FAILED', $err);
+                    $self->done('FAILED', "LOAD ERROR: $err");
                     next JOB;
                 }
             }
@@ -153,7 +170,7 @@ sub run {
               $self->{job} = $self->{job_config}->{class}->new();
             };
             if (my $err = $@) {
-                $self->done('FAILED', $err);
+                $self->done('FAILED', "INSTANTIATION ERROR: $err");
                 next JOB;
             }
 
@@ -165,8 +182,8 @@ sub run {
             # Execute job
             eval {
                 ($self->{stdout}, $self->{stderr}, $self->{result}) = capture {
-                    local $SIG{ALRM} = sub { die 'TIMEDOUT' };
-                    alarm 600; # 10 minutes
+                    local $SIG{ALRM} = sub { confess 'TIMEDOUT' };
+                    alarm $self->{job}->timeout_seconds;
                     my $rv = scalar $self->{job}->execute($self->{job_config});
                     alarm 0;
                     return $rv;
@@ -175,9 +192,9 @@ sub run {
             if (my $err = $@) {
                 alarm 0;
                 if ($err =~ m/TIMEDOUT/) {
-                    $self->done('TIMEDOUT');
+                    $self->done('TIMEDOUT', "TIMEOUT ERROR: $err");
                 } else {
-                    $self->done('FAILED', $err . '; stdout: ' . $self->{stdout});
+                    $self->done('FAILED', "ERROR: $err ; stderr: $self->{stderr}");
                 }
                 next JOB;
             }
