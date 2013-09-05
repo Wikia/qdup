@@ -8,6 +8,13 @@ use Carp;
 use FindBin qw/$Bin/;
 use Qdup::Common;
 
+our $STATUS_ON_HOLD   = 'ON HOLD';
+our $STATUS_WAITING   = 'WAITING';
+our $STATUS_RUNNING   = 'RUNNING';
+our $STATUS_TIMEDOUT  = 'TIMEDOUT';
+our $STATUS_FAILED    = 'FAILED';
+our $STATUS_COMPLETED = 'COMPLETED';
+
 sub new {
     my $class = shift;
     my (%params) = @_; 
@@ -16,6 +23,7 @@ sub new {
     $self->{queue}    ||= 'main';
     $self->{table}    ||= 'qdup_jobs';
     $self->{sleep}    ||= 0;
+    $self->{orig_sleep} = $self->{sleep};
     $self->{id}       ||= 1;
     $self->{work_dir} ||= "$Bin/../log";
 
@@ -25,16 +33,12 @@ sub new {
     $self->{worker} = "$self->{host}:$$";  # host:pid
 
     open $self->{LOG}, ">> $self->{work_dir}/qdup_worker.$self->{queue}.$self->{id}.log";
-    select((select($self->{LOG}), $|=1)[0]);
+    select((select($self->{LOG}), $|=1)[0]);  # disable log buffering
 
-    if (defined $self->{lib}) {
-        eval "use lib qw($self->{lib})";
-        if (my $err = $@) {
-            $self->log("FAILED to include lib $self->{lib}") && confess "FAILED to include lib $self->{lib}";
-        }
-    }
+    eval "use lib qw($self->{lib})" if (defined $self->{lib});
 
     $self->{pool_filter_sql} = " AND (id % $self->{pool}) = " . ($self->{id}-1);
+    $self->{orig_pool_filter_sql} = $self->{pool_filter_sql};
 
     return $self;
 }
@@ -48,9 +52,9 @@ sub done {
         my $retry = 0;
         my $retry_delay = 0;
 
-        if ($status eq 'FAILED') {
+        if ($status eq $STATUS_FAILED) {
             $retry = $self->{job}->retry_on_failure;
-        } elsif ($status eq 'TIMEDOUT') {
+        } elsif ($status eq $STATUS_TIMEDOUT) {
             $retry = $self->{job}->retry_on_timeout;
         }
 
@@ -61,11 +65,11 @@ sub done {
         $result = Qdup::Common::db_do(
             "UPDATE $self->{table}
                 SET worker    = '',
-                    status    = CASE WHEN '$retry' = 1 THEN 'WAITING'
+                    status    = CASE WHEN '$retry' = 1 THEN '$STATUS_WAITING'
                                      ELSE '$status' END,
                     end_time  = CASE WHEN '$retry' = 1 THEN null
                                      ELSE now() END,
-                    run_after = CASE WHEN '$status' = 'COMPLETED' OR '$retry' = 0 THEN run_after
+                    run_after = CASE WHEN '$status' = '$STATUS_COMPLETED' OR '$retry' = 0 THEN run_after
                                      ELSE DATE_ADD(now(), INTERVAL $retry_delay SECOND) END
               WHERE id = $self->{job_config}->{id}"
         );
@@ -75,6 +79,15 @@ sub done {
     }
     if (1 != $result) {
         $self->log("ERROR no rows marked as done [$self->{job_config}->{id}]");
+    } else {
+        if ($self->{stdout}) {
+            $self->log("STDOUT [$self->{job_config}->{id}]");
+            $self->log($self->{stdout});
+        }
+        if ($self->{stderr}) {
+            $self->log("STDERR [$self->{job_config}->{id}]");
+            $self->log($self->{stderr});
+        }
     }
 }
 
@@ -83,22 +96,22 @@ sub log {
     chomp($msg);
     my $ts = `date +"%Y-%m-%d %H:%M:%S"`;
     chomp($ts);
-    print { $self->{LOG} } "$ts : $msg\n";
+    $msg =~ s/(^|\n)/$1$ts /g;
+    print { $self->{LOG} } "$msg\n";
 }
 
 sub run {
     my $self = shift;
 
     while (1) {
-        sleep($self->{sleep});
-
-        # Get possible jobs
+        # Get the next 1000 jobs by priority and insertion order,
+        #   then randomize and filter to 250 to minimize possible collisions with other workers
         my $job_batch_sql = 
             "SELECT *
                FROM (SELECT *
                        FROM $self->{table}
                       WHERE queue  = '$self->{queue}'
-                        AND status = 'WAITING'
+                        AND status = '$STATUS_WAITING'
                         AND worker = ''
                         AND (run_after IS NULL OR run_after < now())
                         $self->{pool_filter_sql}
@@ -116,12 +129,13 @@ sub run {
         };
 
         if (0 == scalar @$job_batch) {
-            # No available jobs; remove the filter and sleep a little longer
+            # No available jobs; remove the filter (to query for other worker's WAITING jobs) and sleep a little longer
             $self->{pool_filter_sql} = '';
             $self->{sleep} = $self->{sleep} >= 30 ? 30 : $self->{sleep} + 5;
         } else {
-            $self->{pool_filter_sql} = " AND (id % $self->{pool}) = " . ($self->{id}-1);
-            $self->{sleep} = 0;
+            # Found jobs, make sure next lookup uses original filter and sleep values
+            $self->{pool_filter_sql} = $self->{orig_pool_filter_sql};
+            $self->{sleep}           = $self->{orig_sleep};
         }
 
         JOB:
@@ -132,14 +146,14 @@ sub run {
             my $lock_sql =
                 "UPDATE $self->{table}
                     SET worker = '$self->{worker}',
-                        status = 'RUNNING',
+                        status = '$STATUS_RUNNING',
                         begin_time = now(),
                         end_time   = null
                   WHERE id = $self->{job_config}->{id}
                     AND queue  = '$self->{queue}'
-                    AND status = 'WAITING'
+                    AND status = '$STATUS_WAITING'
                     AND worker = ''
-                    AND run_after < now()";
+                    AND (run_after IS NULL OR run_after < now())";
 
             my $lock = 0;
 
@@ -152,7 +166,7 @@ sub run {
                 next JOB;
             }
 
-            $self->log("WORKING [$self->{job_config}->{id}]");
+            $self->log("RUNNING [$self->{job_config}->{id}]");
 
             # TODO: force unload of class module (on demand?)
 
@@ -160,7 +174,7 @@ sub run {
             if (! defined $INC{ $self->{job_config}->{class} }) {
                 eval "use $self->{job_config}->{class}";
                 if (my $err = $@) {
-                    $self->done('FAILED', "LOAD ERROR: $err");
+                    $self->done($STATUS_FAILED, $err);
                     next JOB;
                 }
             }
@@ -170,7 +184,7 @@ sub run {
               $self->{job} = $self->{job_config}->{class}->new();
             };
             if (my $err = $@) {
-                $self->done('FAILED', "INSTANTIATION ERROR: $err");
+                $self->done($STATUS_FAILED, $err);
                 next JOB;
             }
 
@@ -182,7 +196,7 @@ sub run {
             # Execute job
             eval {
                 ($self->{stdout}, $self->{stderr}, $self->{result}) = capture {
-                    local $SIG{ALRM} = sub { confess 'TIMEDOUT' };
+                    local $SIG{ALRM} = sub { confess $STATUS_TIMEDOUT };
                     alarm $self->{job}->timeout_seconds;
                     my $rv = scalar $self->{job}->execute($self->{job_config});
                     alarm 0;
@@ -190,17 +204,20 @@ sub run {
                 };
             };
             if (my $err = $@) {
-                alarm 0;
-                if ($err =~ m/TIMEDOUT/) {
-                    $self->done('TIMEDOUT', "TIMEOUT ERROR: $err");
+                alarm 0;  # turn off the alarm!
+                if ($err =~ m/$STATUS_TIMEDOUT/) {
+                    $self->done($STATUS_TIMEDOUT, $err);
                 } else {
-                    $self->done('FAILED', "ERROR: $err ; stderr: $self->{stderr}");
+                    $self->done($STATUS_FAILED, $err);
                 }
                 next JOB;
             }
-            $self->done('COMPLETED');
+            $self->done($STATUS_COMPLETED);
 
         }  # End of batch of jobs
+
+        sleep($self->{sleep});
+
     }  # End of loop for retrieving a batch of jobs
 }
 
