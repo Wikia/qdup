@@ -1,0 +1,159 @@
+#!/usr/bin/perl -w
+
+=head1 SYNOPSIS
+
+qdup_runner --class <str> --method <str> [--params <str> --params <str>] 
+
+=head1 DESCRIPTION
+
+Initializes a class and then calls the method specified in the command line.
+
+class->new();
+class->method( {<params>} );
+
+=head1 ARGUMENTS
+
+=over 10
+
+=item B<--class> <str>
+
+The class name you wish to use.
+
+=item B<--method> <str>
+
+The method name you want to call.
+
+=back
+
+=head1 OPTIONS
+
+=over 10
+
+=item B<--params> <str>
+
+An hashref of parameters passed to class->method.
+
+Specify as: --params "<param1>=><value1>" --params "<param2>=><value2>"
+
+=item B<--period_id> <int>
+
+TODO: Run a specific period_id.  Use in conjunction with --time_id.
+
+=item B<--time_id> <str>
+
+TODO: Specify a time_id to process.  Must be a 15 minute interval.  Ex. '2012-01-01 00:15:00'.  Note: 'YYYY-MM-DD' defaults to 'YYYY-MM-DD 00:00:00'.
+
+=back
+
+=head1 EXAMPLE
+
+# to run a job
+perl qdup_runner --class Wikia::DW::ETL::JobNew::Serialize --method execute --params "source=view"
+
+# to queue up jobs
+perl qdup_runner --class Wikia::DW::ETL::JobNew::Serialize --method queue
+
+=cut
+
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use Data::Dumper;
+use Capture::Tiny ':all';
+
+use Wikia::DW::Common;
+
+########################
+# GLOBALS
+########################
+
+# set default options
+my %OPTS = (
+  method => 'execute'
+);
+
+
+########################
+# SUB
+########################
+
+sub process_args () {
+
+  unless ( GetOptions( "class=s"      => \$OPTS{class},
+                       "method=s"     => \$OPTS{method},
+                       "params=s"     => \@{$OPTS{params}},
+                       "period_id=i"  => \$OPTS{period_id},
+                       "time_id=s"    => \$OPTS{time_id} ) ) {
+    die "ERROR: Could not process command-line arguments\n";
+  }
+
+  $OPTS{params} = process_params();
+
+  if ( !defined($OPTS{class}) || !defined($OPTS{method}) ) {
+    die "ERROR: you must specify --class and --method ...";
+  }
+
+  return 1;
+}
+
+
+# sets --params options to a hasref: $OPTS{params} = {}
+sub process_params {
+  
+  my $href;
+  foreach ( @{$OPTS{params}} ) {
+  
+    my @param_split = split('=',$_);
+
+    $param_split[0] =~ s/(^\s*|\s*$)//g; 
+    $param_split[1] =~ s/(^\s*|\s*$)//g;           
+
+    $href->{$param_split[0]} = $param_split[1];
+  }
+  return $href; 
+}
+
+
+########################
+# MAIN
+########################
+
+process_args();
+
+# check if already running
+Wikia::DW::Common::exit_if_running( with => "--class +$OPTS{class}" );
+
+my %output;
+
+eval "use $OPTS{class}; 1" or die $@; 
+
+=head1 DEBUGGING/TESTING
+
+# for debugging purposes, sometimes it's better to make class method calls outside of eval{} 
+
+my $obj = Wikia::DW::ETL::JobNew::Serialize::Event->new;
+$obj->execute($OPTS{params});
+exit;
+
+=cut
+
+eval {
+  ($output{stdout}, $output{stderr}, $output{result}) = capture {
+    
+    my $class_obj = $OPTS{class}->new();
+
+    my $method = $OPTS{method};
+    $class_obj->$method( $OPTS{params} ); 
+  }
+};
+
+
+# print output from eval
+print STDOUT $output{stdout} if ($output{stdout});
+
+if (my $err = $@) {
+  die "\nERROR:\n$err\n"; 
+}
+
