@@ -22,15 +22,15 @@ my $lib;
 
 GetOptions( 'table=s' => \$table,
             'queue=s' => \$queue,
-            'pool=i' => \$pool,
-            'id=i'   => \$id,
-            'lib=s'  => \$lib );
+            'pool=i'  => \$pool,
+            'id=i'    => \$id,
+            'lib=s'   => \$lib );
 
 my $worker = Qdup::Worker->new( table => $table,
                                 queue => $queue,
-                                pool => $pool,
-                                id   => $id,
-                                lib  => $lib );
+                                pool  => $pool,
+                                id    => $id,
+                                lib   => $lib );
 
 $worker->run;
 
