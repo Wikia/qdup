@@ -33,7 +33,7 @@ The method name you want to call.
 
 An hashref of parameters passed to class->method.
 
-Specify as: --params "<param1>=><value1>" --params "<param2>=><value2>"
+Specify as: --params "<param1>=<value1>" --params "<param2>=<value2>"
 
 =item B<--period_id> <int>
 
@@ -123,7 +123,7 @@ sub process_params {
 process_args();
 
 # check if already running
-Wikia::DW::Common::exit_if_running( with => "--class +$OPTS{class}" );
+#Wikia::DW::Common::exit_if_running( with => "--class +$OPTS{class}" );
 
 my %output;
 
