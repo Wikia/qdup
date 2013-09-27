@@ -17,7 +17,7 @@ class->method( {<params>} );
 
 =item B<--class> <str>
 
-The class name you wish to use.
+The class name you wish to use.  You may specify multiple classes, each class will call the same method (defined by --method) with the same parameters.
 
 =item B<--method> <str>
 
@@ -47,11 +47,11 @@ TODO: Specify a time_id to process.  Must be a 15 minute interval.  Ex. '2012-01
 
 =head1 EXAMPLE
 
-# to run a job
-perl qdup_runner --class Wikia::DW::ETL::JobNew::Serialize --method execute --params "source=view"
+- to run a job:
+$perl qdup_runner --class Wikia::DW::ETL::JobNew::Serialize --method execute --params "source=view"
 
-# to queue up jobs
-perl qdup_runner --class Wikia::DW::ETL::JobNew::Serialize --method queue
+- to queue up jobs:
+$perl qdup_runner --class Wikia::DW::ETL::JobNew::Serialize::Event --class Wikia::DW::ETL::JobNew::Serialize::Special --method queue
 
 =cut
 
@@ -81,7 +81,7 @@ my %OPTS = (
 
 sub process_args () {
 
-  unless ( GetOptions( "class=s"      => \$OPTS{class},
+  unless ( GetOptions( "class=s"      => \@{$OPTS{class}},
                        "method=s"     => \$OPTS{method},
                        "params=s"     => \@{$OPTS{params}},
                        "period_id=i"  => \$OPTS{period_id},
@@ -91,7 +91,7 @@ sub process_args () {
 
   $OPTS{params} = process_params();
 
-  if ( !defined($OPTS{class}) || !defined($OPTS{method}) ) {
+  if ( !ref($OPTS{class}) || !defined($OPTS{method}) ) {
     die "ERROR: you must specify --class and --method ...";
   }
 
@@ -115,6 +115,15 @@ sub process_params {
   return $href; 
 }
 
+sub log_str {
+    my ($msg) = @_;
+    chomp($msg);
+    my $ts = `date +"%Y-%m-%d %H:%M:%S"`;
+    chomp($ts);
+    $msg =~ s/(^|\n)/$1$ts /g;
+    print "$msg\n";
+}
+
 
 ########################
 # MAIN
@@ -122,38 +131,46 @@ sub process_params {
 
 process_args();
 
-# check if already running
-#Wikia::DW::Common::exit_if_running( with => "--class +$OPTS{class}" );
+foreach my $class (@{$OPTS{class}}) {
 
-my %output;
+  my %output;
 
-eval "use $OPTS{class}; 1" or die $@; 
+  log_str("RUNNING $class" . '->' . $OPTS{method});
+
+  # if queing check if already running
+  if ( $OPTS{method} =~ /^queue$/i ) {
+    Wikia::DW::Common::exit_if_running( with => "--class +$class" );
+  }
+
+  eval "use $class; 1" or die $@; 
 
 =head1 DEBUGGING/TESTING
 
-# for debugging purposes, sometimes it's better to make class method calls outside of eval{} 
-
-my $obj = Wikia::DW::ETL::JobNew::Serialize::Event->new;
-$obj->execute($OPTS{params});
-exit;
+  # for debugging purposes, sometimes it's better to make class method calls outside of eval{} 
+  my $obj = Wikia::DW::ETL::JobNew::Serialize::Event->new;
+  $obj->execute($OPTS{params});
+  exit;
 
 =cut
 
-eval {
-  ($output{stdout}, $output{stderr}, $output{result}) = capture {
-    
-    my $class_obj = $OPTS{class}->new();
+  eval {
+    ($output{stdout}, $output{stderr}, $output{result}) = capture {
+      
+      my $class_obj = $class->new();
 
-    my $method = $OPTS{method};
-    $class_obj->$method( $OPTS{params} ); 
+      my $method = $OPTS{method};
+      $class_obj->$method( $OPTS{params} ); 
+    }
+  };
+
+
+  # print STDOUT/STDERR
+  log_str("STDOUT\n$output{stdout}") if ($output{stdout});
+  if (my $err = $@) {
+    log_str("FAILED/ERROR\n$err");
+    die;
+  } else {
+    log_str("COMPLETED");  
   }
-};
 
-
-# print output from eval
-print STDOUT $output{stdout} if ($output{stdout});
-
-if (my $err = $@) {
-  die "\nERROR:\n$err\n"; 
 }
-
