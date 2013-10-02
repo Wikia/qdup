@@ -29,6 +29,10 @@ The method name you want to call.
 
 =over 10
 
+=item B<--lib> <str>
+
+Optional library path where the code for your class can be found.
+
 =item B<--params> <str>
 
 An hashref of parameters passed to class->method.
@@ -84,6 +88,7 @@ sub process_args () {
   unless ( GetOptions( "class=s"      => \@{$OPTS{class}},
                        "method=s"     => \$OPTS{method},
                        "params=s"     => \@{$OPTS{params}},
+                       "lib=s"        => \$OPTS{lib},
                        "period_id=i"  => \$OPTS{period_id},
                        "time_id=s"    => \$OPTS{time_id} ) ) {
     die "ERROR: Could not process command-line arguments\n";
@@ -94,6 +99,8 @@ sub process_args () {
   if ( !ref($OPTS{class}) || !defined($OPTS{method}) ) {
     die "ERROR: you must specify --class and --method ...";
   }
+
+  eval "use lib qw($OPTS{lib})" if $OPTS{lib};
 
   return 1;
 }
