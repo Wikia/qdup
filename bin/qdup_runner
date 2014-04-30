@@ -160,21 +160,21 @@ foreach my $class (@{$OPTS{class}}) {
 
 =cut
 
-  eval {
-    ($output{stdout}, $output{stderr}, $output{result}) = capture {
-      
+  ($output{stdout}, $output{stderr}, $output{exit}) = capture {
+    eval {
       my $class_obj = $class->new();
-
       my $method = $OPTS{method};
       $class_obj->$method( $OPTS{params} ); 
-    }
+    }; 
+      if ($@) {
+        print STDERR $@;
+      }
   };
-
 
   # print STDOUT/STDERR
   log_str("STDOUT\n$output{stdout}") if ($output{stdout});
-  if (my $err = $@) {
-    log_str("FAILED/ERROR\n$err");
+  if ($output{stderr}) {
+    log_str("FAILED/ERROR\n$output{stderr}");
     die;
   } else {
     log_str("COMPLETED");  
