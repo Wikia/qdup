@@ -1,6 +1,6 @@
 qdup:
   adapter:  mysql
-  host:     localhost
+  host:     dw-s5
   port:     3306
   database: qdup
   username: qdup
