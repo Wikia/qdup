@@ -11,7 +11,8 @@ sub db {
                               PrintError => 0,
                               RaiseError => 1,
                               mysql_auto_reconnect => 1 } );
-    $dbh->do('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
+# Qdup worker failing as mysql BINARY_LOG FORMAT changed 
+#   $dbh->do('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
     $dbh->do('SET AUTOCOMMIT = 1');
     $dbh->{'mysql_use_result'} = 1;
     return $dbh;
