@@ -4,7 +4,7 @@ use DBI;
 
 # Get a database handle
 sub db {
-    my $dbh = DBI->connect( 'DBI:mysql:database=qdup;host=dw-s5', # dsn
+    my $dbh = DBI->connect( 'DBI:mysql:database=qdup;host=dataware-s1', # dsn
                             'qdup', # username
                             '',     # password
                             { AutoCommit => 1,

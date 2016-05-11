@@ -1,6 +1,6 @@
 qdup:
   adapter:  mysql
-  host:     dw-s5
+  host:     dataware-s1
   port:     3306
   database: qdup
   username: qdup
